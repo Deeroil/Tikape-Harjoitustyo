@@ -1,0 +1,459 @@
+import java.io.File;
+import java.sql.*;
+import java.text.DateFormat;
+import java.util.Scanner;
+import java.util.Date;
+import java.util.Random;
+
+public class Tikapeharj {
+
+    public static void main(String[] args) throws SQLException {
+        Scanner scan = new Scanner(System.in);
+
+        File tietokanta = new File("testi.db");
+        if (!tietokanta.delete()) {
+            System.out.println("Tietokantaa ei ollut tai sen tyhjentäminen epäonnistui.");
+        }
+        Connection db = DriverManager.getConnection("jdbc:sqlite:testi.db");
+        Statement s = db.createStatement();
+        s.execute("PRAGMA foreign_keys = ON");
+        tulostaOhje();
+
+        while (true) {
+            System.out.println("Anna komento: 1-10");
+            int komento;
+
+            try {
+                komento = Integer.valueOf(scan.nextLine());
+            } catch (Exception e) {
+                System.out.println("Virheellinen syöte.");
+                continue;
+            }
+
+            try {
+                boolean jatka = suoritaKomento(komento, scan, db, s);
+
+
+                if (!jatka) {
+                    db.close();
+                    break;
+                }
+            } catch (SQLException virhe) {
+                String viesti = virhe.getMessage();
+                kasitteleVirhe(viesti, komento);
+            }
+        }
+    }
+
+    public static void tulostaOhje() {
+        System.out.println("Tervetuloa pakettienhallintaan!");
+        System.out.println("1 - Luo taulut tyhjään tietokantaan (jos tietokantaa ei ole vielä olemassa).\n"
+                + "2 - Lisää uusi paikka tietokantaan.\n"
+                + "3 - Lisää uusi asiakas tietokantaan.\n"
+                + "4 - Lisää uusi paketti tietokantaan.\n"
+                + "5 - Lisää uusi tapahtuma tietokantaan.\n"
+                + "6 - Hae kaikki paketin tapahtumat.\n"
+                + "7 - Hae kaikki asiakkaan paketit ja niihin liittyvien tapahtumien määrä.\n"
+                + "8 - Hae annetusta paikasta tapahtumien määrä tiettynä päivänä.\n"
+                + "9 - Suorita tietokannan tehokkuustesti. HUOM! Tyhjentää taulujen tiedot!\n"
+                + "10 - Sulje pakettienhallinta.");
+    }
+
+    /**
+     * Palauttaa false, jos ohjelma halutaan lopettaa.
+     */
+    public static boolean suoritaKomento(int komento, Scanner scan, Connection db, Statement s) throws SQLException {
+        if (komento == 1) {
+            luoTaulut(s);
+
+        } else if (komento == 2) {
+            s.execute("BEGIN TRANSACTION");
+            komentoUusiPaikka(scan, db);
+            s.execute("COMMIT");
+
+        } else if (komento == 3) {
+            s.execute("BEGIN TRANSACTION");
+            komentoUusiAsiakas(scan, db);
+            s.execute("COMMIT");
+
+        } else if (komento == 4) {
+            s.execute("BEGIN TRANSACTION");
+            komentoUusiPaketti(scan, db);
+            s.execute("COMMIT");
+
+        } else if (komento == 5) {
+            s.execute("BEGIN TRANSACTION");
+            komentoUusiTapahtuma(scan, db);
+            s.execute("COMMIT");
+
+        } else if (komento == 6) {
+            s.execute("BEGIN TRANSACTION");
+            komentoHaePaketinTapahtumat(scan, db);
+            s.execute("COMMIT");
+
+        } else if (komento == 7) {
+            s.execute("BEGIN TRANSACTION");
+            komentoPakettienTapahtumienMaara(scan, db, s);
+            s.execute("COMMIT");
+
+        } else if (komento == 8) {
+            s.execute("BEGIN TRANSACTION");
+            komentoTapahtumienMaaraPaikassa(scan, db);
+            s.execute("COMMIT");
+
+        } else if (komento == 9) {
+            tehokkuusTesti(s);
+        } else if (komento == 10) {
+            System.out.println("Suljetaan sovellus.");
+            return false;
+        } else {
+            System.out.println("Virheellinen komento!");
+        }
+        return true;
+    }
+
+    public static void luoTaulut(Statement s) throws SQLException {
+        System.out.println("Luodaan uudet taulut...");
+        s.execute("CREATE TABLE Asiakkaat (asiakasId INTEGER PRIMARY KEY, nimi TEXT UNIQUE)");
+        s.execute("CREATE TABLE Paikat (paikkaId INTEGER PRIMARY KEY, nimi TEXT UNIQUE)");
+        s.execute("CREATE TABLE Paketit (pakettiId INTEGER PRIMARY KEY, seurantakoodi INTEGER UNIQUE, asiakasId INTEGER REFERENCES Asiakkaat)");
+        s.execute("CREATE TABLE Tapahtumat (tapahtumaId INTEGER PRIMARY KEY, pakettiId INTEGER REFERENCES Paketit, paikkaId INTEGER REFERENCES Paikat, kuvaus TEXT, date TEXT)");
+    }
+
+    public static void komentoUusiPaikka(Scanner scan, Connection db) throws SQLException {
+        System.out.println("Lisätään uusi paikka. Anna nimi: ");
+        String nimi = scan.nextLine();
+
+        PreparedStatement lisaaPaikka = db.prepareStatement("INSERT INTO Paikat(nimi) VALUES (?)");
+        lisaaPaikka.setString(1, nimi);
+        lisaaPaikka.executeUpdate();
+    }
+
+    public static void komentoUusiAsiakas(Scanner scan, Connection db) throws SQLException {
+        System.out.println("Lisätään uusi asiakas. Anna nimi: ");
+        String nimi = scan.nextLine();
+
+        PreparedStatement lisaaAsiakas = db.prepareStatement("INSERT INTO Asiakkaat(nimi) VALUES (?)");
+        lisaaAsiakas.setString(1, nimi);
+        lisaaAsiakas.executeUpdate();
+    }
+
+    public static void komentoUusiPaketti(Scanner scan, Connection db) throws SQLException {
+        System.out.println("Lisätään uusi paketti.");
+        System.out.println("Anna paketin seurantakoodi: ");
+        String koodi = scan.nextLine();
+        System.out.println("Anna asiakkaan nimi: ");
+        String nimi = scan.nextLine();
+
+        int loydetynAsiakkaanId = haeAsiakasId(nimi, db);
+        if (loydetynAsiakkaanId == -1) {
+            System.out.println("Asiakasta ei löytynyt, luo ensin asiakas komennolla 3");
+            return;
+        }
+
+        PreparedStatement lisaaPaketti = db.prepareStatement("INSERT INTO Paketit (seurantakoodi, asiakasId) VALUES (?,?)");
+        lisaaPaketti.setString(1, koodi);
+        lisaaPaketti.setInt(2, loydetynAsiakkaanId);
+        lisaaPaketti.executeUpdate();
+    }
+
+    public static void komentoUusiTapahtuma(Scanner scan, Connection db) throws SQLException {
+        System.out.println("Lisätään uusi tapahtuma.");
+        System.out.println("Anna seurantakoodi:");
+        String koodi = scan.nextLine();
+
+        int paketinId = haePaketinId(koodi, db);
+        if (paketinId == -1) {
+            System.out.println("Pakettia ei löytynyt!");
+            return;
+        }
+
+        System.out.println("Anna tapahtuman paikka:");
+        String paikka = scan.nextLine();
+
+        int paikanId = haePaikanId(paikka, db);
+        if (paikanId == -1) {
+            System.out.println("Paikkaa ei löytynyt!");
+            return;
+        }
+
+        Date date = new Date();
+        DateFormat df = DateFormat.getDateTimeInstance();
+        String pvm = df.format(date);
+
+        System.out.println("Anna tapahtuman kuvaus:");
+        String kuvaus = scan.nextLine();
+
+        lisaaTapahtuma(paketinId, paikanId, kuvaus, pvm, db);
+    }
+
+    public static void komentoHaePaketinTapahtumat(Scanner scan, Connection db) throws SQLException {
+        System.out.println("Haetaan pakettiin liittyvät tapahtumat");
+        System.out.println("Anna paketin seurantakoodi:");
+        String koodi = scan.nextLine();
+
+        int loydettyId = haePaketinId(koodi, db);
+        if (loydettyId == -1) {
+            System.out.println("Pakettia ei löytynyt!");
+            return;
+        }
+
+        PreparedStatement tapahtumakysely = db.prepareStatement("SELECT * FROM Tapahtumat JOIN Paketit ON Tapahtumat.pakettiId = Paketit.pakettiId JOIN Paikat ON Paikat.paikkaId = Tapahtumat.paikkaId WHERE seurantakoodi=?");
+        tapahtumakysely.setString(1, koodi);
+
+        ResultSet tapahtumat = tapahtumakysely.executeQuery();
+        while (tapahtumat.next()) {
+            System.out.println(tapahtumat.getString("date") + ", " + tapahtumat.getString("nimi") + ", " + tapahtumat.getString("kuvaus"));
+        }
+    }
+
+   public static void komentoPakettienTapahtumienMaara(Scanner scan, Connection db, Statement s) throws SQLException {
+        System.out.println("Haetaan asiakkaan paketit");
+        System.out.println("Anna asiakas:");
+        String nimi = scan.nextLine();
+
+        int asiakkaanId = haeAsiakasId(nimi, db);
+        if (asiakkaanId == -1) {
+            System.out.println("Asiakasta ei löytynyt, luo ensin asiakas komennolla 3");
+            return;
+        }
+        tulostaAsiakkaanPaketit(asiakkaanId, s, db);
+    }
+
+    public static void komentoTapahtumienMaaraPaikassa(Scanner scan, Connection db) throws SQLException {
+        System.out.println("Anna paikan nimi: ");
+        String paikka = scan.nextLine();
+
+        int paikkaId = haePaikanId(paikka, db);
+        if (paikkaId == -1) {
+            System.out.println("Paikkaa ei löytynyt!");
+            return;
+        }
+
+        System.out.println("Anna päivämäärä (Muodossa pp.kk.vvvv):");
+        String pvm = scan.nextLine();
+        tulostaTapahtumienMaara(paikkaId, pvm, db);
+    }
+
+    public static int haeAsiakasId(String nimi, Connection db) throws SQLException {
+        PreparedStatement etsiAsiakas = db.prepareStatement("SELECT * FROM Asiakkaat WHERE nimi =?");
+        etsiAsiakas.setString(1, nimi);
+
+        ResultSet tulos = etsiAsiakas.executeQuery();
+        if (!tulos.next()) {
+            return -1;
+        } else {
+            return tulos.getInt("asiakasId");
+        }
+    }
+
+    public static int haePaikanId(String paikka, Connection db) throws SQLException {
+        PreparedStatement etsiPaikka = db.prepareStatement("SELECT * FROM Paikat WHERE nimi=?");
+        etsiPaikka.setString(1, paikka);
+
+        ResultSet tulos = etsiPaikka.executeQuery();
+        if (!tulos.next()) {
+            return -1;
+        } else {
+            return tulos.getInt("paikkaId");
+        }
+    }
+
+   public static int haePaketinId(String seurantakoodi, Connection db) throws SQLException {
+        PreparedStatement etsiKoodiId = db.prepareStatement("SELECT pakettiId FROM Paketit WHERE seurantakoodi=?");
+        etsiKoodiId.setString(1, seurantakoodi);
+
+        ResultSet tulos = etsiKoodiId.executeQuery();
+        if (!tulos.next()) {
+            return -1;
+        } else {
+            return tulos.getInt("pakettiId");
+        }
+    }
+
+    public static void tulostaTapahtumienMaara(int paikkaId, String pvm, Connection db) throws SQLException {
+        PreparedStatement tapahtumaKysely = db.prepareStatement("SELECT COUNT(*) AS count FROM Tapahtumat WHERE paikkaId=? AND date LIKE ?");
+        tapahtumaKysely.setInt(1, paikkaId);
+        tapahtumaKysely.setString(2, "%" + pvm + "%");
+
+        ResultSet tapahtumat = tapahtumaKysely.executeQuery();
+        if (tapahtumat.next()) {
+            System.out.println("Tapahtumien määrä: " + tapahtumat.getString("count"));
+        } else {
+            System.out.println("Tapahtumien määrä: 0");
+        }
+    }
+
+    public static void tulostaAsiakkaanPaketit(int asiakkaanId, Statement s, Connection db) throws SQLException {
+        ResultSet paketit = s.executeQuery("SELECT pakettiId FROM Paketit WHERE asiakasId=" + asiakkaanId);
+        while (paketit.next()) {
+            int pakettiId = paketit.getInt("pakettiId");
+            String seurantakoodi = haeSeurantakoodi(pakettiId, s);
+
+            if (seurantakoodi.isEmpty()) {
+                System.out.println("Seurantakoodia ei löytynyt!");
+                return;
+            }
+            int tapahtumienMaara = haeTapahtumienMaara(pakettiId, s);
+            System.out.println(seurantakoodi + ", " + tapahtumienMaara + " tapahtumaa");
+        }
+    }
+
+    public static String haeSeurantakoodi(int pakettiId, Statement s) throws SQLException {
+        ResultSet seurantakoodi = s.executeQuery("SELECT seurantakoodi FROM Paketit WHERE pakettiId=" + pakettiId);
+        if (seurantakoodi.next()) {
+            return seurantakoodi.getString("seurantakoodi");
+        } else {
+            return "";
+        }
+    }
+
+    public static int haeTapahtumienMaara(int pakettiId, Statement s) throws SQLException {
+        ResultSet rivit = s.executeQuery("SELECT COUNT(*) AS count FROM Tapahtumat WHERE pakettiId=" + pakettiId);
+        if (rivit.next()) {
+            return rivit.getInt("count");
+        } else {
+            return 0;
+        }
+    }
+
+    public static void lisaaTapahtuma(int paketinId, int paikanId, String kuvaus, String pvm, Connection db) throws SQLException {
+        PreparedStatement lisaaTapahtuma = db.prepareStatement("INSERT INTO Tapahtumat (pakettiId, paikkaId, kuvaus, date) VALUES (?,?,?,'" + pvm + "')");
+        lisaaTapahtuma.setInt(1, paketinId);
+        lisaaTapahtuma.setInt(2, paikanId);
+        lisaaTapahtuma.setString(3, kuvaus);
+        lisaaTapahtuma.executeUpdate();
+    }
+
+    public static void tehokkuusTesti(Statement s) throws SQLException {
+        pudotaTaulut(s);
+        luoTaulut(s);
+        transaktio(s);
+        haeTuhannenAsiakkaanPaketit(s);
+        haeTuhannenPaketinTapahtumat(s);
+    }
+
+    public static void pudotaTaulut(Statement s) throws SQLException {
+        System.out.println("Poistetaan taulut...");
+        try {
+            s.execute("PRAGMA foreign_keys = OFF");
+            s.executeUpdate("DROP TABLE IF EXISTS Paikat");
+            s.executeUpdate("DROP TABLE IF EXISTS Asiakkaat");
+            s.executeUpdate("DROP TABLE IF EXISTS Paketit");
+            s.executeUpdate("DROP TABLE IF EXISTS Tapahtumat");
+        } catch (SQLException virhe) {
+            System.out.println("Poistamisessa tuli virhe!");
+            System.out.println("Virheviesti: " + virhe.getMessage());
+        } finally {
+            s.execute("PRAGMA foreign_keys = ON");
+        }
+    }
+
+    public static void transaktio(Statement s) throws SQLException {
+        s.execute("BEGIN TRANSACTION");
+        lisaaTuhatPaikkaa(s);
+        lisaaTuhatAsiakasta(s);
+        lisaaTuhatPakettia(s);
+        lisaaMiljoonaTapahtumaa(s);
+        s.execute("COMMIT");
+    }
+
+    public static void lisaaTuhatPaikkaa(Statement s) throws SQLException {
+        long alku = System.nanoTime();
+        for (int i = 1; i <= 1000; i++) {
+            s.execute("INSERT INTO Paikat (nimi) VALUES ('P" + i + "')");
+        }
+
+        long loppu = System.nanoTime();
+        System.out.println("Tuhannen paikan lisäämiseen meni " + ((loppu - alku) / 1e9) + " sekuntia.");
+    }
+
+    public static void lisaaTuhatAsiakasta(Statement s) throws SQLException {
+        long alku = System.nanoTime();
+        for (int i = 1; i <= 1000; i++) {
+            s.execute("INSERT INTO Asiakkaat (nimi) VALUES ('A" + i + "')");
+        }
+
+        long loppu = System.nanoTime();
+        System.out.println("Tuhannen asiakkaan lisäämiseen meni " + ((loppu - alku) / 1e9) + " sekuntia.");
+    }
+
+    public static void lisaaTuhatPakettia(Statement s) throws SQLException {
+        long alku = System.nanoTime();
+        for (int i = 1; i <= 1000; i++) {
+            s.execute("INSERT INTO Paketit (seurantakoodi, asiakasId) VALUES ('Paketti" + i + "'," + i + ")");
+        }
+
+        s.execute("CREATE INDEX IF NOT EXISTS idx_asiakasId ON Paketit (asiakasId)");
+
+        long loppu = System.nanoTime();
+        System.out.println("Tuhannen paketin lisäämiseen meni " + ((loppu - alku) / 1e9) + " sekuntia.");
+    }
+
+    public static void lisaaMiljoonaTapahtumaa(Statement s) throws SQLException {
+        long alku = System.nanoTime();
+        Date date = new Date();
+        Random rand = new Random();
+
+        for (int i = 0; i < 1000000; i++) {
+            DateFormat df = DateFormat.getDateTimeInstance();
+            String pvm = df.format(date);
+
+            int pakettiId = rand.nextInt(1000) + 1;
+            int paikkaId = rand.nextInt(1000) + 1;
+            s.execute("INSERT INTO Tapahtumat (pakettiId, paikkaId, kuvaus, date) VALUES (" + pakettiId + "," + paikkaId + ",'Kuvaus','" + pvm + "')");
+        }
+
+        s.execute("CREATE INDEX IF NOT EXISTS idx_pakettiId ON Tapahtumat (pakettiId)");
+
+        long loppu = System.nanoTime();
+        System.out.println("Miljoonan tapahtuman lisäämiseen meni " + ((loppu - alku) / 1e9) + " sekuntia.");
+    }
+
+    public static void haeTuhannenAsiakkaanPaketit(Statement s) throws SQLException {
+        Random rand = new Random();
+        long alku = System.nanoTime();
+
+        for (int i = 1; i <= 1000; i++) {
+            s.execute("SELECT COUNT(*) FROM Paketit WHERE asiakasId=" + (rand.nextInt(1000) + 1));
+        }
+
+        long loppu = System.nanoTime();
+        System.out.println("Tuhannen satunnaisen asiakkaan pakettien hakemiseen meni " + ((loppu - alku) / 1e9) + " sekuntia.");
+    }
+
+    public static void haeTuhannenPaketinTapahtumat(Statement s) throws SQLException {
+        Random rand = new Random();
+        long alku = System.nanoTime();
+
+        for (int i = 1; i <= 1000; i++) {
+            s.execute("SELECT COUNT(*) FROM Tapahtumat WHERE pakettiId=" + (rand.nextInt(1000) + 1));
+        }
+        long loppu = System.nanoTime();
+        System.out.println("Tuhannen satunnaisen paketin tapahtumien hakemiseen meni " + ((loppu - alku) / 1e9) + " sekuntia.");
+    }
+
+    private static void kasitteleVirhe(String viesti, int komento) {
+        if (viesti.contains("UNIQUE")) {
+
+            if (viesti.contains("Asiakkaat.nimi")) {
+                System.out.println("Virhe! Asiakas on jo olemassa.");
+
+            } else if (viesti.contains("Paikat.nimi")) {
+                System.out.println("Virhe! Paikka on jo olemassa.");
+
+            } else if (viesti.contains("Paketit.seurantakoodi")) {
+                System.out.println("Virhe! Seurantakoodi on jo olemassa.");
+            }
+
+        } else if (komento == 1) {
+            System.out.println("Virhe! Tietokanta on jo olemassa!");
+
+        } else if (viesti.contains("no such table")) {
+            System.out.println("Virhe! Luo tietokanta komennolla 1.");
+
+        } else {
+            System.out.println("Odottamaton virhe! " + viesti);
+        }
+    }
+}
